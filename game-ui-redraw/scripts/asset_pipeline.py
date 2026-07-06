@@ -23,6 +23,14 @@ def _box(value):
     return x, y, width, height
 
 
+def _asset_status(item):
+    return item.get("status", "pending")
+
+
+def _packaged_assets(manifest):
+    return [item for item in manifest.get("assets", []) if _asset_status(item) == "generated"]
+
+
 def create_review(source_path, manifest, output_path):
     image = Image.open(source_path).convert("RGB")
     draw = ImageDraw.Draw(image)
@@ -31,7 +39,7 @@ def create_review(source_path, manifest, output_path):
             continue
         x, y, width, height = _box(item["bbox"])
         if x + width > image.width or y + height > image.height:
-            continue
+            raise ValueError(f"asset {item['id']} bbox exceeds source image bounds")
         color = "#00e5ff" if item.get("status") == "confirmed" else "#ffcc00"
         draw.rectangle((x, y, x + width - 1, y + height - 1), outline=color, width=2)
         draw.rectangle((x, y, x + 24, min(y + 14, y + height)), fill=color)
@@ -41,30 +49,68 @@ def create_review(source_path, manifest, output_path):
     image.save(output)
 
 
-def _remove_corner_background(image):
+def _parse_color(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value.startswith("#"):
+            value = value[1:]
+        if len(value) != 6:
+            raise ValueError(f"invalid keyColor: {value}")
+        return tuple(int(value[index : index + 2], 16) for index in (0, 2, 4))
+    if len(value) != 3:
+        raise ValueError(f"invalid keyColor: {value}")
+    return tuple(map(int, value))
+
+
+def _remove_background(image, key_color=None, tolerance=24):
     image = image.convert("RGBA")
-    key = image.getpixel((0, 0))[:3]
+    key = _parse_color(key_color) or image.getpixel((0, 0))[:3]
+    tolerance = int(tolerance)
     pixels = []
     for red, green, blue, _ in image.getdata():
         distance = max(abs(red - key[0]), abs(green - key[1]), abs(blue - key[2]))
-        alpha = 0 if distance <= 24 else min(255, (distance - 24) * 8)
+        alpha = 0 if distance <= tolerance else min(255, (distance - tolerance) * 8)
         pixels.append((red, green, blue, alpha))
     image.putdata(pixels)
     return image
 
 
-def extract_generated_asset(sheet_path, cell, output_path, target_size, transparent=True):
+def _padded_box(box, image_size, padding):
+    if padding <= 0:
+        return box
+    left, top, right, bottom = box
+    width, height = image_size
+    return (
+        max(0, left - padding),
+        max(0, top - padding),
+        min(width, right + padding),
+        min(height, bottom + padding),
+    )
+
+
+def extract_generated_asset(
+    sheet_path,
+    cell,
+    output_path,
+    target_size,
+    transparent=True,
+    key_color=None,
+    tolerance=24,
+    padding=0,
+):
     sheet = Image.open(sheet_path)
     x, y, width, height = _box(cell)
     if x + width > sheet.width or y + height > sheet.height:
         raise ValueError("cell exceeds generated sheet bounds")
     asset = sheet.crop((x, y, x + width, y + height))
     if transparent:
-        asset = _remove_corner_background(asset)
+        asset = _remove_background(asset, key_color, tolerance)
         visible = asset.getbbox()
         if not visible:
             raise ValueError("generated cell contains no visible asset")
-        asset = asset.crop(visible)
+        asset = asset.crop(_padded_box(visible, asset.size, int(padding)))
         asset.thumbnail(tuple(map(int, target_size)), Image.Resampling.LANCZOS)
         canvas = Image.new("RGBA", tuple(map(int, target_size)), (0, 0, 0, 0))
         canvas.alpha_composite(
@@ -77,10 +123,16 @@ def extract_generated_asset(sheet_path, cell, output_path, target_size, transpar
     canvas.save(output)
 
 
-def _validate_manifest(task_dir, manifest):
+def _has_transparent_pixels(image):
+    if image.mode != "RGBA":
+        return False
+    return image.getchannel("A").getextrema()[0] < 255
+
+
+def _validate_manifest(task_dir, manifest, assets):
     canvas_width = int(manifest["canvas"]["width"])
     canvas_height = int(manifest["canvas"]["height"])
-    for item in manifest.get("assets", []):
+    for item in assets:
         x, y, width, height = _box(item["bbox"])
         if x + width > canvas_width or y + height > canvas_height:
             raise ValueError(f"asset {item['id']} exceeds canvas bounds")
@@ -100,11 +152,13 @@ def _validate_manifest(task_dir, manifest):
                 raise ValueError(f"{relative} must use RGBA")
             if is_background and image.mode not in ("RGB", "RGBA"):
                 raise ValueError(f"{relative} must be an RGB image")
+            if is_background and _has_transparent_pixels(image):
+                raise ValueError(f"{relative} background must be opaque")
 
 
-def _write_metadata(task_dir, manifest):
+def _write_metadata(task_dir, manifest, assets):
     layout = {"canvas": manifest["canvas"], "assets": []}
-    for item in manifest.get("assets", []):
+    for item in assets:
         x, y, width, height = _box(item["bbox"])
         layout["assets"].append(
             {
@@ -126,6 +180,10 @@ def _write_metadata(task_dir, manifest):
     (task_dir / "texts.json").write_text(
         json.dumps({"texts": manifest.get("texts", [])}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+    )
+    style_guide = manifest.get("styleGuide") or manifest.get("style-guide") or {}
+    (task_dir / "style-guide.json").write_text(
+        json.dumps(style_guide, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
 
@@ -151,11 +209,18 @@ def _create_contact_sheet(task_dir, assets):
 
 def package_task(task_dir, manifest):
     task_dir = Path(task_dir)
-    _validate_manifest(task_dir, manifest)
-    _write_metadata(task_dir, manifest)
-    _create_contact_sheet(task_dir, manifest.get("assets", []))
-    allowed = {"layout.json", "texts.json", "contact-sheet.png", "review-numbered.png"}
-    allowed.update(item["filename"] for item in manifest.get("assets", []))
+    assets = _packaged_assets(manifest)
+    _validate_manifest(task_dir, manifest, assets)
+    _write_metadata(task_dir, manifest, assets)
+    _create_contact_sheet(task_dir, assets)
+    allowed = {
+        "layout.json",
+        "texts.json",
+        "style-guide.json",
+        "contact-sheet.png",
+        "review-numbered.png",
+    }
+    allowed.update(item["filename"] for item in assets)
     with zipfile.ZipFile(task_dir / "output.zip", "w", zipfile.ZIP_DEFLATED) as archive:
         for relative in sorted(allowed):
             path = task_dir / relative
@@ -197,6 +262,9 @@ def main():
                 Path(args.task_dir) / item["filename"],
                 (item["width"], item["height"]),
                 item["type"] != "background",
+                item.get("keyColor"),
+                item.get("tolerance", 24),
+                item.get("padding", 0),
             )
     else:
         package_task(Path(args.task_dir), _load_json(args.manifest))

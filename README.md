@@ -40,10 +40,12 @@
 - 生成带编号的 `review-numbered.png`，确认后才开始消耗生图次数。
 - 分组生成全新 AI 素材表，再自动分离、去背景、裁透明边缘并适配原显示尺寸。
 - 将文字与底图分离，保留文字内容、坐标、对齐方式和近似颜色。
-- 输出 `layout.json`，保留素材类型、路径、坐标、尺寸、层级、提示词和状态。
+- 输出 `layout.json` 和 `style-guide.json`，保留素材结构、坐标、风格规则和提示词。
+- 为价格、倒计时、数量、玩家名、等级等动态文字保留结构化角色。
+- 在用户明确要求时，为按钮、图标和面板补生成常见状态。
 - 生成 `contact-sheet.png`，快速浏览整批结果。
 - 指定编号单独重绘，不必整批重新开始。
-- 打包为 `output.zip`，自动排除原截图和工作过程中的 AI 素材表。
+- 打包为 `output.zip`，自动排除原截图、草稿清单、AI 素材表和测试文件。
 
 ## 工作流程
 
@@ -62,7 +64,7 @@ Codex 识别 UI 元素与文字
    ↓
 总览复检 → 指定差项单独重绘
    ↓
-输出 layout.json / texts.json / contact-sheet.png / output.zip
+输出 layout.json / texts.json / style-guide.json / contact-sheet.png / output.zip
 ```
 
 人工确认不是多余步骤：它能在批量生图前拦住漏识别、错误分类和不需要的元素，避免浪费时间和生成次数。
@@ -132,6 +134,7 @@ game-ui-redraw-YYYYMMDD-HHMMSS/
 ├── review-numbered.png
 ├── layout.json
 ├── texts.json
+├── style-guide.json
 ├── contact-sheet.png
 └── output.zip
 ```
@@ -153,13 +156,23 @@ game-ui-redraw-YYYYMMDD-HHMMSS/
 
 ### `texts.json`
 
-文字独立记录 `text`、矩形坐标、对齐方式和近似颜色，方便后续换文案、做多语言或在游戏引擎中重新排版。
+文字独立记录 `text`、矩形坐标、对齐方式、近似颜色和 `role`，方便后续换文案、做多语言或在游戏引擎中重新排版。`role` 可标记价格、倒计时、数量、玩家名、等级等动态字段。
+
+### `style-guide.json`
+
+记录主色、材质、边框、圆角、光效、UI 密度和整体美术描述，方便同一产品后续继续生成一致风格的页面或组件。
 
 ## 运行要求
 
 - Codex，且当前环境可以使用内置图片生成能力。
 - Python 3.9 或更高版本。
 - [Pillow](https://python-pillow.org/)。
+
+本地验证前可安装依赖：
+
+```bash
+python3 -m pip install pillow pyyaml
+```
 
 本项目不需要部署 Web 服务，也不需要下载本地分割模型。
 
@@ -178,14 +191,17 @@ game-ui-redraw-YYYYMMDD-HHMMSS/
 .
 ├── README.md
 ├── game-ui-redraw-skill.zip
-└── game-ui-redraw/
+├── game-ui-redraw/
     ├── SKILL.md
     ├── agents/
     │   └── openai.yaml
+    ├── references/
+    │   ├── export-targets.md
+    │   └── page-types.md
     ├── scripts/
     │   └── asset_pipeline.py
-    └── tests/
-        └── test_asset_pipeline.py
+└── tests/
+    └── test_asset_pipeline.py
 ```
 
 确定性的图片处理由一个小型 Pillow 脚本完成；识别、判断和重绘仍由 Codex 负责，没有额外服务层。
@@ -193,10 +209,11 @@ game-ui-redraw-YYYYMMDD-HHMMSS/
 ## 测试
 
 ```bash
-python3 -m unittest discover -s game-ui-redraw/tests -v
+python3 -m unittest discover -s tests -v
+python3 /path/to/skill-creator/scripts/quick_validate.py game-ui-redraw
 ```
 
-测试覆盖审核框图、AI 素材表分离、透明通道、尺寸校验、坐标打包，以及 ZIP 排除原图。
+测试覆盖审核框图、AI 素材表分离、透明通道、尺寸校验、状态跳过、风格文件、坐标打包，以及 ZIP 排除原图和中间文件。
 
 ## 参与改进
 
@@ -238,10 +255,12 @@ Give it a game lobby, event screen, or feature-page screenshot. It identifies ba
 - Creates `review-numbered.png` and waits for approval before image generation.
 - Generates brand-new grouped AI sprite sheets, then separates assets, removes the flat background, trims transparency, and fits each asset to its original display size.
 - Keeps text separate from artwork while preserving content, coordinates, alignment, and approximate color.
-- Writes `layout.json` with type, path, coordinates, dimensions, layer order, prompt, and status.
+- Writes `layout.json` and `style-guide.json` with structure, coordinates, visual rules, and prompts.
+- Keeps structured roles for dynamic text such as prices, countdowns, quantities, player names, and levels.
+- Generates common button, icon, or panel states only when the user explicitly asks for state extensions.
 - Builds `contact-sheet.png` for fast visual inspection.
 - Regenerates a single numbered asset without restarting the full batch.
-- Packages `output.zip` without the source screenshot or intermediate AI sprite sheets.
+- Packages `output.zip` without the source screenshot, draft manifest, AI sprite sheets, or test files.
 
 ## Workflow
 
@@ -260,7 +279,7 @@ Separate transparent PNGs + write layout metadata
    ↓
 Review contact sheet → regenerate selected asset IDs
    ↓
-Export layout.json / texts.json / contact-sheet.png / output.zip
+Export layout.json / texts.json / style-guide.json / contact-sheet.png / output.zip
 ```
 
 The review gate prevents missing, misclassified, or unwanted elements from consuming generation time.
@@ -330,6 +349,7 @@ game-ui-redraw-YYYYMMDD-HHMMSS/
 ├── review-numbered.png
 ├── layout.json
 ├── texts.json
+├── style-guide.json
 ├── contact-sheet.png
 └── output.zip
 ```
@@ -351,13 +371,23 @@ Each non-text asset includes:
 
 ### `texts.json`
 
-Text stays separate and retains its content, bounding box, alignment, and approximate color, making localization and runtime rendering easier.
+Text stays separate and retains its content, bounding box, alignment, approximate color, and `role`, making localization and runtime rendering easier. Roles can mark prices, countdowns, quantities, player names, levels, and other dynamic fields.
+
+### `style-guide.json`
+
+Captures palette, materials, borders, corner radius, lighting, UI density, and overall art direction so later screens or components can stay visually consistent with the same product.
 
 ## Requirements
 
 - Codex with image generation available in the current environment.
 - Python 3.9 or newer.
 - [Pillow](https://python-pillow.org/).
+
+Install local validation dependencies with:
+
+```bash
+python3 -m pip install pillow pyyaml
+```
 
 No web service or local segmentation model is required.
 
@@ -376,14 +406,17 @@ No web service or local segmentation model is required.
 .
 ├── README.md
 ├── game-ui-redraw-skill.zip
-└── game-ui-redraw/
+├── game-ui-redraw/
     ├── SKILL.md
     ├── agents/
     │   └── openai.yaml
+    ├── references/
+    │   ├── export-targets.md
+    │   └── page-types.md
     ├── scripts/
     │   └── asset_pipeline.py
-    └── tests/
-        └── test_asset_pipeline.py
+└── tests/
+    └── test_asset_pipeline.py
 ```
 
 One small Pillow script handles deterministic image processing. Codex remains responsible for recognition, judgment, and image generation; there is no extra service layer.
@@ -391,10 +424,11 @@ One small Pillow script handles deterministic image processing. Codex remains re
 ## Tests
 
 ```bash
-python3 -m unittest discover -s game-ui-redraw/tests -v
+python3 -m unittest discover -s tests -v
+python3 /path/to/skill-creator/scripts/quick_validate.py game-ui-redraw
 ```
 
-Tests cover numbered review overlays, generated-sheet separation, transparency, dimension validation, metadata packaging, and source exclusion from the ZIP.
+Tests cover numbered review overlays, generated-sheet separation, transparency, dimension validation, skipped statuses, style metadata, packaging, and exclusion of source or intermediate files from the ZIP.
 
 ## Contributing
 

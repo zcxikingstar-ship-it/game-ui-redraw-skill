@@ -1,4 +1,4 @@
 interface:
   display_name: "游戏 UI 自动重绘"
-  short_description: "识别游戏截图中的完整界面，并重新生成无字按钮、图标、面板和背景素材"
+  short_description: "识别游戏截图界面，重绘无字素材，并输出布局、文字和风格数据"
   default_prompt: "Use $game-ui-redraw to identify and redraw the UI assets from my attached game screenshot."
