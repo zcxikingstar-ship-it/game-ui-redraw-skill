@@ -17,6 +17,18 @@ Turn one screenshot into newly generated, text-free UI assets plus layout and te
 - Deliver non-background UI elements as RGBA PNG with real alpha transparency, never JPG, WebP, or flat-color fake transparency.
 - Read `references/page-types.md` when classifying a lobby, event, shop, popup, or battle HUD screenshot. Read `references/export-targets.md` when the user asks for Unity, Cocos, web, or engine-ready metadata.
 
+## Stability guardrails
+
+Codex's built-in `image_gen` can return large image payloads into the chat stream. On long or image-heavy threads this can trigger response-stream disconnects or remote compact failures. Reduce that risk by default:
+
+- If the current thread already shows stream disconnects, remote compact errors, repeated reconnects, or many generated images, do not start a large generation batch in that thread. Tell the user the thread is image-heavy and recommend a fresh generation thread or the configured CLI path.
+- Keep built-in `image_gen` batches small. Default to 1–3 assets per generated sheet; use 4 only for very simple same-size icons. Do not use 5–6 asset sheets unless the user explicitly prioritizes fewer calls over stability.
+- Generate large backgrounds, full-screen panels, and dense icon sheets one at a time.
+- After each successful generation, immediately copy or move the selected PNG into the task directory, then continue from local files. Do not rely on the chat preview as the source of truth.
+- Show one lightweight preview per milestone, preferably the contact sheet or final selected PNG. Avoid repeatedly embedding every intermediate generated sheet in final/status messages.
+- If a generation succeeds but the response disconnects before packaging, inspect `$CODEX_HOME/generated_images/<thread-id>/` and recover the newest PNG instead of regenerating from scratch.
+- Keep final reporting concise: saved paths, validation result, and remaining IDs. Avoid pasting large prompt sets or long manifests into chat unless the user asks.
+
 ## 1. Identify and review
 
 Create a new task directory outside this skill, named `game-ui-redraw-YYYYMMDD-HHMMSS`. Analyze:
@@ -87,7 +99,7 @@ Show `review-numbered.png` and summarize uncertain items. Stop for user confirma
 
 Before generating, create `<task-dir>/generated-sheets/` and `<task-dir>/batches/`. If the current Codex environment does not expose an image generation tool that can return or save a local image file, stop and tell the user that generation cannot continue in this environment. Do not run `split` without a real generated PNG file.
 
-Group 1–6 confirmed assets of the same type. Prefer 2–6 assets per group, but generate a single asset when only one confirmed asset remains. For each group:
+Group confirmed assets of the same type. Prefer 1–3 assets per group for stability; use 4 only for simple same-size icons; generate a single asset when only one confirmed asset remains. For each group:
 
 1. Call `image_gen` with the full screenshot as style reference.
 2. Explicitly request a clean, newly drawn sprite sheet; no copied pixels, letters, numbers, labels, watermarks, shadows outside cells, or source-image background.
