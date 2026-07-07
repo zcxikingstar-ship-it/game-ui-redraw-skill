@@ -31,6 +31,35 @@ def _packaged_assets(manifest):
     return [item for item in manifest.get("assets", []) if _asset_status(item) == "generated"]
 
 
+def _validate_asset_state(manifest):
+    valid_statuses = {"pending", "confirmed", "generated", "rejected"}
+    for item in manifest.get("assets", []):
+        status = _asset_status(item)
+        if status not in valid_statuses:
+            raise ValueError(f"asset {item['id']} has invalid status: {status}")
+        if status == "confirmed":
+            raise ValueError(f"asset {item['id']} is confirmed but not generated")
+
+
+def _safe_relative_path(value):
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"unsafe filename: {relative}")
+    return relative
+
+
+def _validate_type_and_path(item):
+    asset_type = item["type"]
+    if asset_type not in TYPE_DIRS:
+        raise ValueError(f"asset {item['id']} has invalid type: {asset_type}")
+    relative = _safe_relative_path(item["filename"])
+    if not relative.parts or relative.parts[0] != TYPE_DIRS[asset_type]:
+        raise ValueError(
+            f"asset {item['id']} filename must be under {TYPE_DIRS[asset_type]}/"
+        )
+    return relative
+
+
 def create_review(source_path, manifest, output_path):
     image = Image.open(source_path).convert("RGB")
     draw = ImageDraw.Draw(image)
@@ -69,7 +98,8 @@ def _remove_background(image, key_color=None, tolerance=24):
     key = _parse_color(key_color) or image.getpixel((0, 0))[:3]
     tolerance = int(tolerance)
     pixels = []
-    for red, green, blue, _ in image.getdata():
+    get_pixels = getattr(image, "get_flattened_data", image.getdata)
+    for red, green, blue, _ in get_pixels():
         distance = max(abs(red - key[0]), abs(green - key[1]), abs(blue - key[2]))
         alpha = 0 if distance <= tolerance else min(255, (distance - tolerance) * 8)
         pixels.append((red, green, blue, alpha))
@@ -136,9 +166,7 @@ def _validate_manifest(task_dir, manifest, assets):
         x, y, width, height = _box(item["bbox"])
         if x + width > canvas_width or y + height > canvas_height:
             raise ValueError(f"asset {item['id']} exceeds canvas bounds")
-        relative = Path(item["filename"])
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError(f"unsafe filename: {relative}")
+        relative = _validate_type_and_path(item)
         path = task_dir / relative
         if not path.is_file():
             raise ValueError(f"missing asset: {relative}")
@@ -150,6 +178,8 @@ def _validate_manifest(task_dir, manifest, assets):
             is_background = item["type"] == "background"
             if not is_background and image.mode != "RGBA":
                 raise ValueError(f"{relative} must use RGBA")
+            if not is_background and not _has_transparent_pixels(image):
+                raise ValueError(f"{relative} must contain transparent pixels")
             if is_background and image.mode not in ("RGB", "RGBA"):
                 raise ValueError(f"{relative} must be an RGB image")
             if is_background and _has_transparent_pixels(image):
@@ -209,6 +239,7 @@ def _create_contact_sheet(task_dir, assets):
 
 def package_task(task_dir, manifest):
     task_dir = Path(task_dir)
+    _validate_asset_state(manifest)
     assets = _packaged_assets(manifest)
     _validate_manifest(task_dir, manifest, assets)
     _write_metadata(task_dir, manifest, assets)
@@ -256,10 +287,11 @@ def main():
     elif args.command == "split":
         batch = _load_json(args.batch)
         for item in batch["assets"]:
+            relative = _validate_type_and_path(item)
             extract_generated_asset(
                 args.sheet,
                 item["cell"],
-                Path(args.task_dir) / item["filename"],
+                Path(args.task_dir) / relative,
                 (item["width"], item["height"]),
                 item["type"] != "background",
                 item.get("keyColor"),

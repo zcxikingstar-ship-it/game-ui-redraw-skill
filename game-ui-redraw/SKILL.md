@@ -85,13 +85,17 @@ Show `review-numbered.png` and summarize uncertain items. Stop for user confirma
 
 ## 2. Generate brand-new assets
 
-Group 2–6 confirmed assets of the same type. For each group:
+Before generating, create `<task-dir>/generated-sheets/` and `<task-dir>/batches/`. If the current Codex environment does not expose an image generation tool that can return or save a local image file, stop and tell the user that generation cannot continue in this environment. Do not run `split` without a real generated PNG file.
+
+Group 1–6 confirmed assets of the same type. Prefer 2–6 assets per group, but generate a single asset when only one confirmed asset remains. For each group:
 
 1. Call `image_gen` with the full screenshot as style reference.
 2. Explicitly request a clean, newly drawn sprite sheet; no copied pixels, letters, numbers, labels, watermarks, shadows outside cells, or source-image background.
 3. Place each requested asset in a separate non-overlapping cell on a flat chroma background whose color does not appear in the assets.
 4. Preserve each element's shape, palette, material, border treatment, lighting, and game-art style.
-5. Write a batch JSON using the actual generated sheet cell bounds:
+5. Save the generated sprite sheet as `<task-dir>/generated-sheets/<type>-<ids>.png`, such as `generated-sheets/buttons-01-04-05.png`. If the generated image is only displayed in chat and cannot be saved to disk, stop and ask the user to provide the saved PNG path.
+6. Inspect the saved sheet dimensions before writing cell coordinates.
+7. Write a batch JSON to `<task-dir>/batches/<type>-<ids>.json` using the actual generated sheet cell bounds:
 
 ```json
 {
@@ -115,12 +119,12 @@ Split only the AI-generated sheet:
 
 ```bash
 python3 <skill-dir>/scripts/asset_pipeline.py split \
-  --sheet <generated-sheet.png> \
-  --batch <batch.json> \
+  --sheet <task-dir>/generated-sheets/<type>-<ids>.png \
+  --batch <task-dir>/batches/<type>-<ids>.json \
   --task-dir <task-dir>
 ```
 
-Never pass the source screenshot to `split`. Change each successful asset status to `generated`. If one group fails, retry only that group.
+Never pass the source screenshot, review image, or any source crop to `split`. Change each successful asset status to `generated`. If one group fails, retry only that group and keep already generated assets unchanged.
 
 Optional states: only when the user explicitly asks to extend component states, generate extra assets for confirmed buttons, icons, or panels. Use suffixes such as `-normal`, `-pressed`, `-disabled`, `-selected`, or `-highlighted`; keep coordinates for the original screenshot asset unchanged and add state assets as separate generated files.
 

@@ -14,6 +14,10 @@ asset_pipeline = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(asset_pipeline)
 
 
+def _pixels(image):
+    return getattr(image, "get_flattened_data", image.getdata)()
+
+
 class AssetPipelineTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -72,7 +76,7 @@ class AssetPipelineTest(unittest.TestCase):
         self.assertEqual(result.size, (40, 20))
         self.assertEqual(result.mode, "RGBA")
         self.assertEqual(result.getpixel((0, 0))[3], 0)
-        self.assertGreater(max(pixel[3] for pixel in result.getdata()), 0)
+        self.assertGreater(max(pixel[3] for pixel in _pixels(result)), 0)
 
     def test_split_accepts_key_color_tolerance_and_padding(self):
         sheet = self.root / "generated.png"
@@ -97,14 +101,14 @@ class AssetPipelineTest(unittest.TestCase):
         result = Image.open(output)
         self.assertEqual(result.mode, "RGBA")
         self.assertEqual(result.getpixel((0, 0))[3], 0)
-        self.assertGreater(max(pixel[3] for pixel in result.getdata()), 0)
+        self.assertGreater(max(pixel[3] for pixel in _pixels(result)), 0)
 
     def test_package_validates_files_and_excludes_source_images(self):
         task = self.root / "task"
         (task / "buttons").mkdir(parents=True)
-        Image.new("RGBA", (30, 12), (255, 0, 0, 255)).save(
-            task / "buttons" / "start-01.png"
-        )
+        button = Image.new("RGBA", (30, 12), (255, 0, 0, 255))
+        button.putpixel((0, 0), (0, 0, 0, 0))
+        button.save(task / "buttons" / "start-01.png")
         Image.new("RGB", (100, 80), "blue").save(task / "source.png")
         (task / "generated-sheet.png").write_text("not packaged", encoding="utf-8")
         (task / "assets-draft.json").write_text("not packaged", encoding="utf-8")
@@ -154,9 +158,9 @@ class AssetPipelineTest(unittest.TestCase):
     def test_package_skips_pending_and_rejected_assets(self):
         task = self.root / "task"
         (task / "buttons").mkdir(parents=True)
-        Image.new("RGBA", (30, 12), (255, 0, 0, 255)).save(
-            task / "buttons" / "start-01.png"
-        )
+        button = Image.new("RGBA", (30, 12), (255, 0, 0, 255))
+        button.putpixel((0, 0), (0, 0, 0, 0))
+        button.save(task / "buttons" / "start-01.png")
         manifest = {
             "canvas": {"width": 100, "height": 80},
             "assets": [
@@ -248,6 +252,125 @@ class AssetPipelineTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "expected 10x10"):
             asset_pipeline.package_task(task, manifest)
+
+    def test_package_rejects_confirmed_assets_that_were_not_generated(self):
+        task = self.root / "task"
+        manifest = {
+            "canvas": {"width": 100, "height": 80},
+            "assets": [
+                {
+                    "id": "01",
+                    "type": "button",
+                    "filename": "buttons/start-01.png",
+                    "bbox": [0, 0, 10, 10],
+                    "zIndex": 1,
+                    "prompt": "button",
+                    "status": "confirmed",
+                }
+            ],
+            "texts": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "confirmed but not generated"):
+            asset_pipeline.package_task(task, manifest)
+
+    def test_package_rejects_invalid_status(self):
+        task = self.root / "task"
+        manifest = {
+            "canvas": {"width": 100, "height": 80},
+            "assets": [
+                {
+                    "id": "01",
+                    "type": "button",
+                    "filename": "buttons/start-01.png",
+                    "bbox": [0, 0, 10, 10],
+                    "zIndex": 1,
+                    "prompt": "button",
+                    "status": "done",
+                }
+            ],
+            "texts": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "invalid status"):
+            asset_pipeline.package_task(task, manifest)
+
+    def test_package_rejects_type_directory_mismatch(self):
+        task = self.root / "task"
+        (task / "icons").mkdir(parents=True)
+        icon = Image.new("RGBA", (10, 10), (255, 0, 0, 255))
+        icon.putpixel((0, 0), (0, 0, 0, 0))
+        icon.save(task / "icons" / "start-01.png")
+        manifest = {
+            "canvas": {"width": 100, "height": 80},
+            "assets": [
+                {
+                    "id": "01",
+                    "type": "button",
+                    "filename": "icons/start-01.png",
+                    "bbox": [0, 0, 10, 10],
+                    "zIndex": 1,
+                    "prompt": "button",
+                    "status": "generated",
+                }
+            ],
+            "texts": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "filename must be under buttons/"):
+            asset_pipeline.package_task(task, manifest)
+
+    def test_package_rejects_opaque_non_background_assets(self):
+        task = self.root / "task"
+        (task / "buttons").mkdir(parents=True)
+        Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(
+            task / "buttons" / "start-01.png"
+        )
+        manifest = {
+            "canvas": {"width": 100, "height": 80},
+            "assets": [
+                {
+                    "id": "01",
+                    "type": "button",
+                    "filename": "buttons/start-01.png",
+                    "bbox": [0, 0, 10, 10],
+                    "zIndex": 1,
+                    "prompt": "button",
+                    "status": "generated",
+                }
+            ],
+            "texts": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "transparent pixels"):
+            asset_pipeline.package_task(task, manifest)
+
+    def test_split_rejects_unsafe_output_paths(self):
+        sheet = self.root / "generated.png"
+        Image.new("RGB", (20, 20), "#00ff00").save(sheet)
+        batch = {
+            "assets": [
+                {
+                    "id": "01",
+                    "type": "button",
+                    "filename": "../outside.png",
+                    "cell": [0, 0, 20, 20],
+                    "width": 10,
+                    "height": 10,
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(ValueError, "unsafe filename"):
+            for item in batch["assets"]:
+                relative = asset_pipeline._validate_type_and_path(item)
+                asset_pipeline.extract_generated_asset(
+                    sheet,
+                    item["cell"],
+                    self.root / relative,
+                    (item["width"], item["height"]),
+                    item["type"] != "background",
+                )
 
 
 if __name__ == "__main__":
